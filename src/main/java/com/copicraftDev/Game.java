@@ -4,6 +4,7 @@ import org.lwjgl.glfw.GLFW;
 import org.lwjgl.opengl.GL11;
 
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 
@@ -20,9 +21,9 @@ public class Game {
 
     // Camera
     private float cameraX = 0f;
-    private float deadZone = 0.55f; // smaller dead zone
+    private float deadZone = 0.55f; // requested smaller dead zone
 
-    // Movement tuning
+    // Movement tuning (smoothed)
     private final float accel = 6.0f;
     private final float maxSpeed = 2.8f;
     private final float friction = 6.0f;
@@ -40,7 +41,7 @@ public class Game {
     private final float tunnelSmoothSpeed = 6f;
     private final float pushStrengthBase = 4.5f;
 
-    // Player size
+    // Player size (collision extents)
     private final float playerHalfW = 0.06f;
     private final float playerHalfH = 0.06f;
 
@@ -50,12 +51,12 @@ public class Game {
     private final float[] particleY = new float[PARTICLE_COUNT];
     private final float[] particleSize = new float[PARTICLE_COUNT];
 
-    // 1D obstacles
+    // 1D obstacles (collision half-width is constant; visual width animates)
     private static final float OBSTACLE_HALF_COLLISION = 0.06f;
     private static final float OBSTACLE_HEIGHT = 0.08f;
-    private static final float OBSTACLE_SPAWN_DISTANCE = 2.5f;
-    private static final float OBSTACLE_SPAWN_CHANCE_1D = 0.45f;
-    private static final float OBSTACLE_SPAWN_CHANCE_2D = 0.03f;
+    private static final float OBSTACLE_SPAWN_DISTANCE = 2.5f;      // larger gaps
+    private static final float OBSTACLE_SPAWN_CHANCE_1D = 0.45f;    // frequent in 1D
+    private static final float OBSTACLE_SPAWN_CHANCE_2D = 0.03f;    // rare in 2D
 
     private static class Obstacle1D {
         float x;
@@ -74,6 +75,9 @@ public class Game {
         void update(float dt) {
             float alpha = 1f - (float) Math.exp(-animSpeed * dt);
             visualHalfW += (targetHalfW - visualHalfW) * alpha;
+
+            // Clamp so it never inverts
+            if (visualHalfW < 0f) visualHalfW = 0f;
         }
 
         void render() {
@@ -81,6 +85,7 @@ public class Game {
             float yBottom = -OBSTACLE_HEIGHT / 2f;
             float yTop = OBSTACLE_HEIGHT / 2f;
 
+            GL11.glColor3f(0.2f, 0.2f, 0.2f);
             GL11.glBegin(GL11.GL_QUADS);
             GL11.glVertex2f(x - visualHalfW, yBottom);
             GL11.glVertex2f(x + visualHalfW, yBottom);
@@ -91,9 +96,9 @@ public class Game {
     }
 
     private final List<Obstacle1D> obstacles1D = new ArrayList<>();
-    private float lastObstacleX = 0f;
+    private float lastObstacleX = 0f; // start relative to playerX (initialized in ctor)
 
-    // 2D tunnel obstacles
+    // 2D tunnel obstacles (walls)
     private static class TunnelObstacle {
         float x;
         float halfThickness;
@@ -125,6 +130,10 @@ public class Game {
         this.tunnelHeight = minTunnelHeight;
         this.cameraX = playerX;
 
+        // initialize lastObstacleX behind the player so first spawn starts ahead
+        this.lastObstacleX = playerX - OBSTACLE_SPAWN_DISTANCE;
+
+        // particles
         for (int i = 0; i < PARTICLE_COUNT; i++) {
             particleX[i] = rand.nextFloat() * 4f - 2f;
             particleY[i] = rand.nextFloat() * 2f - 1f;
@@ -134,44 +143,48 @@ public class Game {
         System.out.println("Game started");
     }
 
+    // main update called each frame; dt in seconds
     public void update(float dt) {
         handleToggleInput();
         handleMovementInput(dt);
         updateTunnel(dt);
         applyVerticalPush(dt);
-        integrate(dt);
 
+        // we integrate movement using sweep-style collision for horizontal axis
+        sweepIntegrateHorizontal(dt);
+        // vertical integration is simpler (limited by tunnel bounds)
+        integrateVertical(dt);
+
+        // spawning & updates
         spawnObstacles1D();
         spawnTunnelObstaclesIf2D();
 
         for (Obstacle1D o : obstacles1D) o.update(dt);
 
-        if (isEffectively2D()) {
-            checkCollisionTunnelObstacles();
-        } else {
-            checkObstacleCollision1D();
-        }
+        // prune obstacles behind camera to keep lists small
+        pruneOldObstacles();
 
+        // camera follow + render
         updateCamera(dt);
         render();
     }
 
+    // handle H toggle with edge detection; convert 2D -> 1D on collapse
     private void handleToggleInput() {
         boolean hNow = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_H) == GLFW.GLFW_PRESS;
         if (hNow && !prevH) {
             boolean prevTarget2D = target2D;
             target2D = !target2D;
-
             if (prevTarget2D && !target2D) convertAllTunnelTo1D();
         }
         prevH = hNow;
     }
 
+    // Convert all current 2D tunnel obstacles into animated 1D obstacles (one-time)
     private void convertAllTunnelTo1D() {
-        float startVisualHalfW = tunnelHeight / 2f;
+        float startVisualHalfW = tunnelHeight / 2f; // full tunnel half-width visually
         float targetHalfW = OBSTACLE_HALF_COLLISION;
         float animSpeed = 8f;
-
         for (TunnelObstacle to : tunnelObstacles) {
             if (!to.active) continue;
             obstacles1D.add(new Obstacle1D(to.x, startVisualHalfW, targetHalfW, animSpeed));
@@ -183,6 +196,7 @@ public class Game {
         return tunnelHeight > (minTunnelHeight + 0.02f);
     }
 
+    // movement input (WASD + arrows)
     private void handleMovementInput(float dt) {
         float inputX = 0f, inputY = 0f;
         if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_A) == GLFW.GLFW_PRESS ||
@@ -204,7 +218,9 @@ public class Game {
         if (allowVertical) {
             if (inputY != 0f) velY += inputY * accel * dt;
             else velY *= Math.max(0f, 1f - (friction * 0.5f * dt));
-        } else velY *= Math.max(0f, 1f - (friction * 2f * dt));
+        } else {
+            velY *= Math.max(0f, 1f - (friction * 2f * dt));
+        }
 
         velX = clamp(velX, -maxSpeed, maxSpeed);
         velY = clamp(velY, -maxSpeed, maxSpeed);
@@ -215,12 +231,14 @@ public class Game {
         else if (velX < 0f) { velX += friction * dt; if (velX > 0f) velX = 0f; }
     }
 
+    // Tunnel smooth growth/shrink
     private void updateTunnel(float dt) {
         float target = target2D ? maxTunnelHeight : minTunnelHeight;
         float alpha = 1f - (float) Math.exp(-tunnelSmoothSpeed * dt);
         tunnelHeight += (target - tunnelHeight) * alpha;
     }
 
+    // push player Y toward center when retracting; also clamp inside tunnel
     private void applyVerticalPush(float dt) {
         float t = (tunnelHeight - minTunnelHeight) / Math.max(0.0001f, (maxTunnelHeight - minTunnelHeight));
         t = clamp(t, 0f, 1f);
@@ -233,14 +251,66 @@ public class Game {
             velY *= Math.max(0f, 1f - (strength * 0.8f * dt));
         }
 
-        // Collision with tunnel edges (gray walls)
+        // clamp to tunnel edges
         if (playerY < -halfH) { playerY = -halfH; velY = 0f; }
-        if (playerY > halfH) { playerY = halfH; velY = 0f; }
+        if (playerY > halfH)  { playerY = halfH;  velY = 0f; }
     }
 
-    private void integrate(float dt) {
-        playerX += velX * dt;
-        playerY += velY * dt;
+    // Sweep-style horizontal integration to avoid tunneling
+    private void sweepIntegrateHorizontal(float dt) {
+        float dx = velX * dt;
+        if (dx == 0f) return;
+
+        float oldX = playerX;
+        float intendedX = playerX + dx;
+
+        float candidateX = intendedX;
+        boolean collided = false;
+
+        if (isEffectively2D()) {
+            for (TunnelObstacle to : tunnelObstacles) {
+                if (!to.active) continue;
+                float left = to.x - to.halfThickness;
+                float right = to.x + to.halfThickness;
+
+                if (dx > 0f && oldX + playerHalfW <= left && intendedX + playerHalfW >= left) {
+                    float hitX = left - playerHalfW;
+                    if (hitX < candidateX) { candidateX = hitX; collided = true; }
+                } else if (dx < 0f && oldX - playerHalfW >= right && intendedX - playerHalfW <= right) {
+                    float hitX = right + playerHalfW;
+                    if (hitX > candidateX) { candidateX = hitX; collided = true; }
+                }
+            }
+        } else {
+            for (Obstacle1D obs : obstacles1D) {
+                if (!obs.active) continue;
+                float left = obs.x - OBSTACLE_HALF_COLLISION;
+                float right = obs.x + OBSTACLE_HALF_COLLISION;
+
+                if (dx > 0f && oldX + playerHalfW <= left && intendedX + playerHalfW >= left) {
+                    float hitX = left - playerHalfW;
+                    if (hitX < candidateX) { candidateX = hitX; collided = true; }
+                } else if (dx < 0f && oldX - playerHalfW >= right && intendedX - playerHalfW <= right) {
+                    float hitX = right + playerHalfW;
+                    if (hitX > candidateX) { candidateX = hitX; collided = true; }
+                }
+            }
+        }
+
+        if (collided) {
+            playerX = candidateX;
+            velX = 0f;
+        } else {
+            playerX = intendedX;
+        }
+    }
+
+    private void integrateVertical(float dt) {
+        float dy = velY * dt;
+        playerY += dy;
+        float halfH = tunnelHeight / 2f - playerHalfH - 0.01f;
+        if (playerY < -halfH) { playerY = -halfH; velY = 0f; }
+        if (playerY > halfH)  { playerY = halfH;  velY = 0f; }
     }
 
     private void spawnObstacles1D() {
@@ -261,10 +331,7 @@ public class Game {
         boolean hasObstacleAhead = false;
         for (TunnelObstacle t : tunnelObstacles) {
             if (!t.active) continue;
-            if (t.x > playerX) {
-                hasObstacleAhead = true;
-                break;
-            }
+            if (t.x > playerX - 0.5f && t.x < playerX + 4f) hasObstacleAhead = true;
         }
 
         if (!hasObstacleAhead && rand.nextFloat() < OBSTACLE_SPAWN_CHANCE_2D) {
@@ -274,29 +341,10 @@ public class Game {
         }
     }
 
-    private void checkObstacleCollision1D() {
-        for (Obstacle1D obs : obstacles1D) {
-            if (!obs.active) continue;
-            if (playerX + playerHalfW > obs.x - OBSTACLE_HALF_COLLISION &&
-                    playerX - playerHalfW < obs.x + OBSTACLE_HALF_COLLISION) {
-                if (velX > 0f) playerX = obs.x - OBSTACLE_HALF_COLLISION - playerHalfW;
-                else if (velX < 0f) playerX = obs.x + OBSTACLE_HALF_COLLISION + playerHalfW;
-                velX = 0f;
-            }
-        }
-    }
-
-    private void checkCollisionTunnelObstacles() {
-        for (TunnelObstacle to : tunnelObstacles) {
-            if (!to.active) continue;
-            float half = to.halfThickness;
-            if (playerX + playerHalfW > to.x - half &&
-                    playerX - playerHalfW < to.x + half) {
-                if (velX > 0f) playerX = to.x - half - playerHalfW;
-                else if (velX < 0f) playerX = to.x + half + playerHalfW;
-                velX = 0f;
-            }
-        }
+    private void pruneOldObstacles() {
+        float removeBeforeX = cameraX - 6f;
+        obstacles1D.removeIf(o -> o.x < removeBeforeX);
+        tunnelObstacles.removeIf(t -> t.x < removeBeforeX);
     }
 
     private void updateCamera(float dt) {
@@ -326,9 +374,7 @@ public class Game {
         drawTunnel();
         drawTunnelBorder();
 
-        GL11.glColor3f(0.2f, 0.2f, 0.2f);
         for (Obstacle1D o : obstacles1D) o.render();
-
         for (TunnelObstacle to : tunnelObstacles) to.render(tunnelHeight);
 
         drawPlayer();
@@ -363,7 +409,7 @@ public class Game {
         float top = tunnelHeight / 2f;
 
         GL11.glBegin(GL11.GL_QUADS);
-        GL11.glColor3f(0f, 0f, 0f);
+        GL11.glColor3f(0f, 0f, 0f); // black tunnel
         GL11.glVertex2f(left, bottom);
         GL11.glVertex2f(right, bottom);
         GL11.glVertex2f(right, top);
@@ -372,30 +418,24 @@ public class Game {
     }
 
     private void drawTunnelBorder() {
-        float border = 0.02f;
         float left = cameraX - 1f;
         float right = cameraX + 1f;
         float bottom = -tunnelHeight / 2f;
         float top = tunnelHeight / 2f;
 
-        GL11.glBegin(GL11.GL_QUADS);
-        GL11.glColor3f(0.65f, 0.65f, 0.65f);
-        // top
-        GL11.glVertex2f(left, top);
-        GL11.glVertex2f(right, top);
-        GL11.glVertex2f(right, top + border);
-        GL11.glVertex2f(left, top + border);
-        // bottom
-        GL11.glVertex2f(left, bottom - border);
-        GL11.glVertex2f(right, bottom - border);
-        GL11.glVertex2f(right, bottom);
+        GL11.glLineWidth(2f);
+        GL11.glColor3f(0.3f, 0.3f, 0.3f);
+        GL11.glBegin(GL11.GL_LINE_LOOP);
         GL11.glVertex2f(left, bottom);
+        GL11.glVertex2f(right, bottom);
+        GL11.glVertex2f(right, top);
+        GL11.glVertex2f(left, top);
         GL11.glEnd();
     }
 
     private void drawPlayer() {
-        GL11.glBegin(GL11.GL_QUADS);
         GL11.glColor3f(1f, 0.6f, 0.2f);
+        GL11.glBegin(GL11.GL_QUADS);
         GL11.glVertex2f(playerX - playerHalfW, playerY - playerHalfH);
         GL11.glVertex2f(playerX + playerHalfW, playerY - playerHalfH);
         GL11.glVertex2f(playerX + playerHalfW, playerY + playerHalfH);
@@ -403,7 +443,7 @@ public class Game {
         GL11.glEnd();
     }
 
-    private static float clamp(float v, float a, float b) {
-        return Math.max(a, Math.min(b, v));
+    private float clamp(float val, float min, float max) {
+        return Math.max(min, Math.min(max, val));
     }
 }
