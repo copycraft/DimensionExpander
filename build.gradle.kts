@@ -1,5 +1,6 @@
 plugins {
     id("java")
+    id("io.github.goooler.shadow") version "8.1.8"
 }
 
 group = "com.copicraftDev"
@@ -10,7 +11,6 @@ repositories {
 }
 
 dependencies {
-    // ----------------- LWJGL (OpenGL + GLFW) -----------------
     implementation(platform("org.lwjgl:lwjgl-bom:3.3.3"))
 
     implementation("org.lwjgl:lwjgl")
@@ -32,7 +32,6 @@ dependencies {
     runtimeOnly("org.lwjgl:lwjgl-glfw::natives-macos")
     runtimeOnly("org.lwjgl:lwjgl-opengl::natives-macos")
 
-    // ----------------- JUnit -----------------
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
