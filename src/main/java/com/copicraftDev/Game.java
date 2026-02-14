@@ -22,8 +22,8 @@ public class Game {
     private float tunnelHeight;
     private static final float MIN_TUNNEL = 0.08f;
     private static final float MAX_TUNNEL = 1.6f;
-    private boolean target2D = false; // desired mode
-    private boolean prevH = false;    // H key edge detect
+    private boolean target2D = false;
+    private boolean prevH = false;
     private static final float TUNNEL_SMOOTH = 6f;
     private static final float PUSH_BASE = 4.5f;
     private static final float PLAYER_HALF_W = 0.06f;
@@ -38,18 +38,19 @@ public class Game {
     private final List<Obstacle1D> obstacles1D = new ArrayList<>();
     private float lastObstacleX = 0f;
     private final List<TunnelObstacle> tunnelObstacles = new ArrayList<>();
+
     public Game(long window) {
         this.window = window;
         this.tunnelHeight = MIN_TUNNEL;
         this.cameraX = playerX;
         this.lastObstacleX = playerX - OBSTACLE_SPAWN_DISTANCE;
-
         for (int i = 0; i < PARTICLE_COUNT; i++) {
-            particles[i] = new Particle(rand.nextFloat() * 4f - 2f,
-                    rand.nextFloat() * 2f - 1f,
-                    0.002f + rand.nextFloat() * 0.006f);
+            float px = rand.nextFloat() * 4f - 2f;
+            float py = rand.nextFloat() * 2f - 1f;
+            float size = 0.0025f + rand.nextFloat() * 0.0075f;
+            float depth = 0.6f + rand.nextFloat() * 1.4f;
+            particles[i] = new Particle(px, py, size, depth);
         }
-
         System.out.println("Game started");
     }
 
@@ -65,6 +66,7 @@ public class Game {
         for (Obstacle1D o : obstacles1D) o.update(dt);
         pruneOldObstacles();
         updateCamera(dt);
+        for (Particle p : particles) p.update(dt, cameraX);
         render();
     }
 
@@ -79,7 +81,7 @@ public class Game {
     }
 
     private void convertAllTunnelTo1D() {
-        float startVisualHalfW = tunnelHeight / 2f; // full tunnel half-width visually
+        float startVisualHalfW = tunnelHeight / 2f;
         float targetHalfW = OBSTACLE_HALF_COLLISION;
         float animSpeed = 8f;
         for (TunnelObstacle to : tunnelObstacles) {
@@ -95,29 +97,22 @@ public class Game {
 
     private void handleMovementInput(float dt) {
         float inputX = 0f, inputY = 0f;
-        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_A) == GLFW.GLFW_PRESS ||
-                GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT) == GLFW.GLFW_PRESS) inputX -= 1f;
-        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_D) == GLFW.GLFW_PRESS ||
-                GLFW.glfwGetKey(window, GLFW.GLFW_KEY_RIGHT) == GLFW.GLFW_PRESS) inputX += 1f;
-
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_A) == GLFW.GLFW_PRESS || GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT) == GLFW.GLFW_PRESS) inputX -= 1f;
+        if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_D) == GLFW.GLFW_PRESS || GLFW.glfwGetKey(window, GLFW.GLFW_KEY_RIGHT) == GLFW.GLFW_PRESS) inputX += 1f;
         boolean allowVertical = tunnelHeight > (MIN_TUNNEL + 0.02f);
         if (allowVertical) {
-            if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_W) == GLFW.GLFW_PRESS ||
-                    GLFW.glfwGetKey(window, GLFW.GLFW_KEY_UP) == GLFW.GLFW_PRESS) inputY += 1f;
-            if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_S) == GLFW.GLFW_PRESS ||
-                    GLFW.glfwGetKey(window, GLFW.GLFW_KEY_DOWN) == GLFW.GLFW_PRESS) inputY -= 1f;
-        }
+            if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_W) == GLFW.GLFW_PRESS || GLFW.glfwGetKey(window, GLFW.GLFW_KEY_UP) == GLFW.GLFW_PRESS) inputY += 1f;
+            if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_S) == GLFW.GLFW_PRESS || GLFW.glfwGetKey(window, GLFW.GLFW_KEY_DOWN) == GLFW.GLFW_PRESS) inputY -= 1f;
 
+        }
         if (inputX != 0f) velX += inputX * ACCEL * dt;
         else applyFriction(dt);
-
         if (allowVertical) {
             if (inputY != 0f) velY += inputY * ACCEL * dt;
             else velY *= Math.max(0f, 1f - (FRICTION * 0.5f * dt));
         } else {
             velY *= Math.max(0f, 1f - (FRICTION * 2f * dt));
         }
-
         velX = clamp(velX, -MAX_SPEED, MAX_SPEED);
         velY = clamp(velY, -MAX_SPEED, MAX_SPEED);
     }
@@ -137,14 +132,12 @@ public class Game {
         float t = (tunnelHeight - MIN_TUNNEL) / Math.max(0.0001f, (MAX_TUNNEL - MIN_TUNNEL));
         t = clamp(t, 0f, 1f);
         float halfH = tunnelHeight / 2f - PLAYER_HALF_H - 0.01f;
-
         if (t < 0.999f) {
             float strength = PUSH_BASE * (1f - t);
             float pushAlpha = 1f - (float) Math.exp(-strength * dt);
             playerY += (0f - playerY) * pushAlpha;
             velY *= Math.max(0f, 1f - (strength * 0.8f * dt));
         }
-
         if (playerY < -halfH) { playerY = -halfH; velY = 0f; }
         if (playerY > halfH)  { playerY = halfH;  velY = 0f; }
     }
@@ -152,19 +145,15 @@ public class Game {
     private void sweepIntegrateHorizontal(float dt) {
         float dx = velX * dt;
         if (dx == 0f) return;
-
         float oldX = playerX;
         float intendedX = playerX + dx;
-
         float candidateX = intendedX;
         boolean collided = false;
-
         if (isEffectively2D()) {
             for (TunnelObstacle to : tunnelObstacles) {
                 if (!to.active) continue;
                 float left = to.x - to.halfThickness;
                 float right = to.x + to.halfThickness;
-
                 if (dx > 0f && oldX + PLAYER_HALF_W <= left && intendedX + PLAYER_HALF_W >= left) {
                     float hitX = left - PLAYER_HALF_W;
                     if (hitX < candidateX) { candidateX = hitX; collided = true; }
@@ -178,7 +167,6 @@ public class Game {
                 if (!obs.active) continue;
                 float left = obs.x - OBSTACLE_HALF_COLLISION;
                 float right = obs.x + OBSTACLE_HALF_COLLISION;
-
                 if (dx > 0f && oldX + PLAYER_HALF_W <= left && intendedX + PLAYER_HALF_W >= left) {
                     float hitX = left - PLAYER_HALF_W;
                     if (hitX < candidateX) { candidateX = hitX; collided = true; }
@@ -188,7 +176,6 @@ public class Game {
                 }
             }
         }
-
         if (collided) {
             playerX = candidateX;
             velX = 0f;
@@ -219,13 +206,11 @@ public class Game {
 
     private void spawnTunnelObstaclesIf2D() {
         if (!target2D) return;
-
         boolean hasObstacleAhead = false;
         for (TunnelObstacle t : tunnelObstacles) {
             if (!t.active) continue;
             if (t.x > playerX - 0.5f && t.x < playerX + 4f) hasObstacleAhead = true;
         }
-
         if (!hasObstacleAhead && rand.nextFloat() < OBSTACLE_SPAWN_CHANCE_2D) {
             float spawnX = playerX + 2f + rand.nextFloat() * 2f;
             float halfThickness = 0.08f + rand.nextFloat() * 0.12f;
@@ -243,10 +228,8 @@ public class Game {
         float leftBound = cameraX - deadZone;
         float rightBound = cameraX + deadZone;
         float targetX = cameraX;
-
         if (playerX > rightBound) targetX = playerX - deadZone;
         else if (playerX < leftBound) targetX = playerX + deadZone;
-
         float smoothSpeed = 6f;
         cameraX += (targetX - cameraX) * (1f - (float) Math.exp(-smoothSpeed * dt));
     }
@@ -255,20 +238,15 @@ public class Game {
         GL11.glMatrixMode(GL11.GL_PROJECTION);
         GL11.glLoadIdentity();
         GL11.glOrtho(cameraX - 1.0, cameraX + 1.0, -1.0, 1.0, -1.0, 1.0);
-
         GL11.glMatrixMode(GL11.GL_MODELVIEW);
         GL11.glLoadIdentity();
-
         GL11.glClearColor(0.82f, 0.82f, 0.82f, 1f);
         GL11.glClear(GL11.GL_COLOR_BUFFER_BIT);
-
-        for (Particle p : particles) p.render(cameraX);
+        for (Particle p : particles) p.render();
         drawTunnel();
         drawTunnelBorder();
-
         for (Obstacle1D o : obstacles1D) o.render();
         for (TunnelObstacle to : tunnelObstacles) to.render(tunnelHeight);
-
         drawPlayer();
     }
 
@@ -277,7 +255,6 @@ public class Game {
         float right = cameraX + 1f;
         float bottom = -tunnelHeight / 2f;
         float top = tunnelHeight / 2f;
-
         GL11.glColor3f(0f, 0f, 0f);
         GL11.glBegin(GL11.GL_QUADS);
         GL11.glVertex2f(left, bottom);
@@ -292,7 +269,6 @@ public class Game {
         float right = cameraX + 1f;
         float bottom = -tunnelHeight / 2f;
         float top = tunnelHeight / 2f;
-
         GL11.glLineWidth(2f);
         GL11.glColor3f(0.3f, 0.3f, 0.3f);
         GL11.glBegin(GL11.GL_LINE_LOOP);
@@ -318,26 +294,36 @@ public class Game {
     }
 
     private static final class Particle {
-        float x, y, s;
-
-        Particle(float x, float y, float s) {
+        float x, y, size, depth, vx, vy, phase;
+        Particle(float x, float y, float size, float depth) {
             this.x = x;
             this.y = y;
-            this.s = s;
+            this.size = size;
+            this.depth = depth;
+            this.phase = (float) Math.random() * 6.2831855f;
+            this.vx = 0.25f * depth * (0.6f + (float) Math.random() * 0.8f);
+            this.vy = ((float) Math.random() - 0.5f) * 0.06f * depth;
         }
-
-        void render(float camX) {
-            float screenLeft = camX - 1f;
-            float screenRight = camX + 1f;
-            if (x < screenLeft - 0.1f) x += 4f;
-            if (x > screenRight + 0.1f) x -= 4f;
-
+        void update(float dt, float camX) {
+            phase += dt * (0.4f + depth * 0.6f);
+            y += (float) Math.sin(phase) * 0.02f * dt * (1f + depth * 0.5f);
+            x += vx * dt;
+            y += vy * dt;
+            float left = camX - 1f;
+            float right = camX + 1f;
+            float range = 4f;
+            if (x < left - 0.2f) x += range;
+            if (x > right + 0.2f) x -= range;
+            if (y < -1f) y += 2f;
+            if (y > 1f) y -= 2f;
+        }
+        void render() {
             GL11.glColor3f(0.5f, 0.5f, 0.5f);
             GL11.glBegin(GL11.GL_QUADS);
-            GL11.glVertex2f(x - s, y - s);
-            GL11.glVertex2f(x + s, y - s);
-            GL11.glVertex2f(x + s, y + s);
-            GL11.glVertex2f(x - s, y + s);
+            GL11.glVertex2f(x - size, y - size);
+            GL11.glVertex2f(x + size, y - size);
+            GL11.glVertex2f(x + size, y + size);
+            GL11.glVertex2f(x - size, y + size);
             GL11.glEnd();
         }
     }
@@ -348,25 +334,21 @@ public class Game {
         final float targetHalfW;
         final float animSpeed;
         boolean active = true;
-
         Obstacle1D(float x, float startVisualHalfW, float targetHalfW, float animSpeed) {
             this.x = x;
             this.visualHalfW = startVisualHalfW;
             this.targetHalfW = targetHalfW;
             this.animSpeed = animSpeed;
         }
-
         void update(float dt) {
             float alpha = 1f - (float) Math.exp(-animSpeed * dt);
             visualHalfW += (targetHalfW - visualHalfW) * alpha;
             if (visualHalfW < 0f) visualHalfW = 0f;
         }
-
         void render() {
             if (!active) return;
             float yBottom = -OBSTACLE_HEIGHT / 2f;
             float yTop = OBSTACLE_HEIGHT / 2f;
-
             GL11.glColor3f(0.2f, 0.2f, 0.2f);
             GL11.glBegin(GL11.GL_QUADS);
             GL11.glVertex2f(x - visualHalfW, yBottom);
@@ -381,13 +363,11 @@ public class Game {
         float x;
         float halfThickness;
         boolean active = true;
-
         TunnelObstacle(float x, float halfThickness) {
             this.x = x;
             this.halfThickness = halfThickness;
             this.active = true;
         }
-
         void render(float tunnelHeight) {
             if (!active) return;
             float h = tunnelHeight / 2f;
