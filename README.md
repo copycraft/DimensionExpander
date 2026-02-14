@@ -42,53 +42,13 @@ This project is designed to be a **playable single-player experience** while dem
 ---
 
 ## How to Play
-
-1. **Launch the game**: Run the `Main` class from your IDE or terminal.  
-2. **Click the big green button** on the start screen to begin.  
-3. **Move the player** through the tunnel:  
-   - In **1D**, only horizontal movement is allowed.  
-   - In **2D**, move freely within the tunnel.  
-4. **Avoid obstacles**: Hitting obstacles stops movement in that direction.  
-5. **Toggle dimensions**: Press `H` to expand/retract the tunnel.  
-6. **Observe particle effects**: Particles give a subtle sense of motion.  
-
+1. Launch the .jar latest
+2. Click the big green button to start playing.
 ---
 
 ## Requirements
 
 - **Java 17+**
-- **LWJGL 3.3.3+**
-- **Gradle 9+** (for building and running)
-- Works on **Linux, Windows, and Mac**.
 
 ---
 
-## Setup
-
-1. Clone the repository:
-
-```bash
-git clone https://github.com/copicraftDev/DimensionExpander.git
-cd DimensionExpander
-```
-
-Build and run with Gradle:
-
-./gradlew run
-
-
-On Windows, use gradlew.bat run.
-
-Click the big green button to start playing.
-
-Code Structure
-
-Main.java – Starts the application and displays the menu.
-
-Game.java – Main game logic: player movement, camera, tunnel, obstacles, rendering.
-
-Obstacle1D – 1D obstacles class with smooth shrinking animation.
-
-TunnelObstacle – 2D obstacles class covering the tunnel width.
-
-Particle system – Background movement indicator.
